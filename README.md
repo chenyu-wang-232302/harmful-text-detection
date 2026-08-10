@@ -50,6 +50,7 @@ python3 clean_and_store.py
 TextCNN：
 cd model
 python3 train_real_textcnn.py
+
 BERT 微调：
 python3 finetune_bert_quick.py
 
