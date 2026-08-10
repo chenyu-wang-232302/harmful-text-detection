@@ -1,8 +1,10 @@
-*.csv
-*.bin
-*.pth
+*.pyc
 __pycache__/
 *.log
+*.pth
+*.pkl
+*.json
+*.csv
 .venv/
-venv/
-demo-screenshot.png
+.vscode/
+.idea/
