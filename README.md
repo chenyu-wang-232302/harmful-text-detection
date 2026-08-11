@@ -12,7 +12,7 @@ label=0：正常合规文本
 - **实时管道**：Kafka + PySpark Structured Streaming（备用批处理方案）
 - **模型训练**：PyTorch 构建 TextCNN，Transformers 微调 BERT
 - **存储与查询**：MySQL 业务库，Elasticsearch 指标存储（可选）
-- **可视化**：Python Matplotlib 生成评估报告，Tableau 制作归因分析看板
+- **可视化**：Streamlit, Plotly, Matplotlib
 - **实验管理**：MySQL A/B 实验分流表，SQL 指标计算
 
 ## 数据架构
@@ -36,52 +36,43 @@ label=0：正常合规文本
 | 推理延迟 | 单条文本平均推理时间 | 线上成本 |
 
 ## 快速开始
-### 1. 环境准备
-- Ubuntu 20.04+，Python 3.10，Java 11/17
-- 安装依赖：`pip install -r requirements.txt`
-- 启动 MySQL：`sudo systemctl start mysql`
-- （可选）启动 Kafka：`/opt/kafka/bin/kafka-server-start.sh -daemon /opt/kafka/config/server.properties`
+### 1. 数据采集与清洗
+- 处理 7 个包含不同违规类别的 JSON 文件，使用 Python 解析并重构为二分类标签（0:安全, 1:有害）。
+- 利用 **SQL 的 `CASE WHEN`** 逻辑统一了混乱的原始标签，并通过正则表达式清洗异常字符，最终将 **15515 条真实标注数据** 存入 MySQL。
 
-### 2. 数据清洗入库
-cd consumer
-python3 clean_and_store.py
+### 2. 实时流处理管道
+- **手动部署**了 Zookeeper 和 Kafka 集群，并创建了 `raw_content` 主题。
+- 编写了 Python **生产者**脚本，实时将 MySQL 中的文本模拟成日志流发送到 Kafka。
+- 开发了基于 **PySpark Structured Streaming** 的消费者程序，实现了流式数据处理和模型调用（该功能在本次演示中因集群资源限制，采用批处理模式备用，代码保留完整）。
 
-### 3. 模型训练与预测
-TextCNN：
-cd model
-python3 train_real_textcnn.py
+### 3. 双模型训练与对比
+- **TextCNN**：使用 PyTorch 从零搭建并训练 3 个 epoch。通过 `CrossEntropyLoss` 的 `weight` 参数引入**类别权重**，有效缓解了数据不均衡带来的误杀问题。
+- **BERT**：基于 `bert-base-chinese` 预训练模型，冻结主体参数，仅**微调分类头** 2 个 epoch。在严格的资源限制下（无 GPU），快速验证了预训练模型的强大语义迁移能力。
+- **公平性说明**：实验记录明确指出了 Epoch 差异，体现了对资源约束的考量。
 
-BERT 微调：
-python3 finetune_bert_quick.py
+### 4. A/B 实验与指标计算
+- 在 MySQL 中设计了 `ab_experiment_log` 表，通过 SQL 模拟了 **30% BERT（实验组）vs 70% TextCNN（对照组）** 的灰度流量分割。
+- 编写了复杂 SQL 语句，自动计算两个模型的**漏放率、误杀率、准确率、精确率、召回率和 F1-Score**。
 
-### 4. 生成评估报告
-python3 generate_evaluation_report.py
+### 5. 交互式可视化报告
+- 使用 **Streamlit + Plotly** 搭建了工业级交互分析仪表板。
+- 仪表板支持**双模型同屏对比**，包含混淆矩阵热力图、预测概率分布、指标卡片和详细分类报告。
+- **实验结论**和**业务决策**直接嵌入在页面中，形成完整的数据分析闭环。
 
-### 5. A/B 实验分流
-USE risk_control;
-INSERT INTO ab_experiment_log (post_id, model_group)
-SELECT post_id, CASE WHEN RAND() < 0.3 THEN 'experiment' ELSE 'control' END
-FROM model_predictions;
+## 📈 关键成果对比
+| 指标 | TextCNN (3 Epochs) | BERT (仅微调分类头 2 Epochs) |
+| :--- | :---: | :---: |
+| **准确率** | 97.80% | 96.98% |
+| **漏放率** | 2.42% | 2.38% |
+| **误杀率** | 0.70% | 7.30% |
+| **有害类 F1-Score** | 0.9872 | 0.9826 |
+| **推理速度** | 极快 (~3ms) | 较慢 (~20ms) |
 
-### 核心成果展示
-双模型对比指标
-模型	准确率	漏放率	误杀率	推理延迟
-TextCNN	98.23%	0.48%	6.00%	~3ms
-BERT	99.32%	0.70%	0.53%	~20ms
-综合评估报告
-https://images/comprehensive_report.png
+*注：BERT 当前指标受限于 CPU 环境和极少的训练轮次，其真实潜力远高于此。*
 
-### 实验结论与业务决策
-结论：BERT 在语义理解上具有显著优势，几乎不漏放有害内容，且对安全内容的误伤极低；TextCNN 推理速度更快，适合高并发场景，但误杀率偏高。
-决策：建议采用“分层审核”策略——高风险内容（新用户、短文本、敏感 IP）使用 BERT 进行精准审核，普通内容使用 TextCNN 快速过滤。通过 30% 灰度流量验证后，全量上线可使整体误杀率降低至 1% 以下，人工审核成本减少 40%。
-
-### 后续优化方向
-引入 GPU 进行全参数 BERT 微调，进一步提升精度
-部署 TensorFlow Serving 或 TorchServe 实现线上推理
-使用 Flink 替代 PySpark Streaming，提升实时性
-引入模型可解释性工具（SHAP/LIME）分析误判案例
-
-
+## 🖥️ 项目演示
+- **交互式仪表板 (本地)**：在虚拟机中运行 `streamlit run app.py`，通过浏览器访问 `http://192.168.112.135:8501` 可在线体验完整的分析看板。
+- **静态评估报告**：`images/comprehensive_report.png` 提供了模型性能的概览截图。
 
 
 
