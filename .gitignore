@@ -1,10 +1,39 @@
-*.pyc
-__pycache__/
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 虚拟机文件
+*.vmdk
+*.vmem
+*.vmsd
+*.vmx
 *.log
-*.pth
-*.pkl
-*.json
-*.csv
-.venv/
+
+# Python 编译缓存
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 虚拟环境
+venv/
+env/
+
+# IDE
 .vscode/
 .idea/
+
+# 模型文件（如果太大，可忽略，本例中模型文件可保留）
+# *.pth
+# *.pkl
+
+# 数据文件（如果要隐藏敏感数据）
+# *.csv
+# *.json
+
+# Kafka & ZooKeeper 数据
+/tmp/kafka-logs/
+/opt/kafka/logs/
+/opt/zookeeper/logs/
