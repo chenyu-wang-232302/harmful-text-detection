@@ -1,8 +1,14 @@
-import pymysql, torch, torch.nn as nn, torch.optim as optim
+import pymysql
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
-import jieba, random, numpy as np, json
+import jieba
+import random
+import numpy as np
+import json
 
-# ===== 1. 从 MySQL 读取数据 =====
+# ===== 1. 从 MySQL 读取真实数据 =====
 conn = pymysql.connect(host='localhost', user='root', password='912393', database='risk_control')
 cursor = conn.cursor()
 cursor.execute("SELECT original_text, true_label FROM model_predictions")
@@ -13,9 +19,9 @@ texts = [row[0] for row in data]
 labels = [row[1] for row in data]
 
 print(f"总样本数: {len(texts)}")
-print(f"有害样本: {sum(labels)}, 安全样本: {len(labels)-sum(labels)}")
+print(f"有害样本: {sum(labels)}, 安全样本: {len(labels) - sum(labels)}")
 
-# ===== 2. 构建词汇表 =====
+# ===== 2. 构建词汇表（基于真实文本） =====
 word_count = {}
 for text in texts:
     for word in jieba.lcut(text):
@@ -43,6 +49,7 @@ class TextDataset(Dataset):
         seq = text_to_sequence(self.texts[idx])
         return torch.tensor(seq, dtype=torch.long), torch.tensor(self.labels[idx], dtype=torch.long)
 
+# 8:2 分层随机划分
 random.seed(42)
 indices = list(range(len(texts)))
 random.shuffle(indices)
@@ -55,7 +62,7 @@ test_dataset = TextDataset([texts[i] for i in test_idx], [labels[i] for i in tes
 train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
 test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
 
-# ===== 4. TextCNN 模型 =====
+# ===== 4. TextCNN 模型（输出2类） =====
 class TextCNN(nn.Module):
     def __init__(self, vocab_size, embed_dim=64, num_classes=2):
         super(TextCNN, self).__init__()
@@ -80,7 +87,7 @@ class TextCNN(nn.Module):
 
 model = TextCNN(vocab_size, num_classes=2)
 
-# ===== 5. 类别权重 =====
+# ===== 5. 类别权重（安全类少数，权重高） =====
 pos_count = sum(labels)
 neg_count = len(labels) - pos_count
 weight_for_0 = len(labels) / (2.0 * neg_count)
@@ -90,21 +97,22 @@ criterion = nn.CrossEntropyLoss(weight=class_weights)
 optimizer = optim.AdamW(model.parameters(), lr=0.001)
 
 # ===== 6. 训练与验证 =====
-def train_epoch():
+def train_epoch(model, loader, criterion, optimizer):
     model.train()
     total_loss = 0
-    for inputs, targets in train_loader:
+    for inputs, targets in loader:
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
         total_loss += loss.item()
-    return total_loss / len(train_loader)
+    return total_loss / len(loader)
 
-def evaluate(loader):
+def evaluate(model, loader):
     model.eval()
-    all_preds, all_targets = [], []
+    all_preds = []
+    all_targets = []
     with torch.no_grad():
         for inputs, targets in loader:
             outputs = model(inputs)
@@ -118,24 +126,24 @@ def evaluate(loader):
     fp = ((all_targets == 0) & (all_preds == 1)).sum() / max((all_targets == 0).sum(), 1)
     return acc, miss, fp
 
-print("开始训练 TextCNN...")
+print("\n开始训练 TextCNN（带类别权重）...")
 for epoch in range(3):
-    loss = train_epoch()
-    train_acc, _, _ = evaluate(train_loader)
-    test_acc, miss, fp = evaluate(test_loader)
-    print(f"Epoch {epoch+1}: Loss={loss:.4f}, Train Acc={train_acc:.4f}, Test Acc={test_acc:.4f}, Miss={miss:.4f}, FP={fp:.4f}")
+    train_loss = train_epoch(model, train_loader, criterion, optimizer)
+    train_acc, _, _ = evaluate(model, train_loader)
+    test_acc, miss_rate, fp_rate = evaluate(model, test_loader)
+    print(f"Epoch {epoch+1}: Loss={train_loss:.4f}, Train Acc={train_acc:.4f}, Test Acc={test_acc:.4f}, Miss Rate={miss_rate:.4f}, FP Rate={fp_rate:.4f}")
 
 # ===== 7. 保存模型和词汇表 =====
 torch.save(model.state_dict(), '/home/wcy/nlp-risk-control/model/textcnn_real.pth')
 with open('/home/wcy/nlp-risk-control/model/vocab.json', 'w', encoding='utf-8') as f:
     json.dump(word_to_idx, f, ensure_ascii=False)
-print("模型已保存")
+print("\n模型已保存: textcnn_real.pth, vocab.json")
 
-# ===== 8. 对全量数据预测并更新 MySQL（model_version='TextCNN'） =====
+# ===== 8. 对全量数据预测并更新 MySQL =====
 model.eval()
 conn = pymysql.connect(host='localhost', user='root', password='912393', database='risk_control')
 cursor = conn.cursor()
-cursor.execute("SELECT post_id, original_text FROM model_predictions WHERE model_version='TextCNN'")
+cursor.execute("SELECT post_id, original_text FROM model_predictions")
 rows = cursor.fetchall()
 
 for post_id, text in rows:
@@ -144,9 +152,10 @@ for post_id, text in rows:
         outputs = model(seq)
         prob = torch.softmax(outputs, dim=1)[0, 1].item()
     pred_label = 1 if prob > 0.5 else 0
-    cursor.execute("UPDATE model_predictions SET pred_label=%s, pred_prob=%s WHERE post_id=%s",
+    cursor.execute("UPDATE model_predictions SET pred_label=%s, pred_prob=%s, model_version='TextCNN' WHERE post_id=%s",
                    (pred_label, prob, post_id))
 
 conn.commit()
 conn.close()
-print("TextCNN 预测结果已更新 MySQL")
+print("全量真实预测完成，已更新 MySQL")
+
