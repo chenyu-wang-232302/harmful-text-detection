@@ -72,7 +72,8 @@ label=0：正常合规文本
 
 ## 🖥️ 项目演示
 - **交互式仪表板 (本地)**：在虚拟机中运行 `streamlit run app.py`，通过浏览器访问 `http://192.168.112.135:8501` 可在线体验完整的分析看板。
-- **静态评估报告**：`images/comprehensive_report.png` 提供了模型性能的概览截图。
+**交互式仪表板本地运行截图：**  
+![Streamlit Dashboard](images/dashboard_screenshot.png)
 
 
 
